@@ -294,7 +294,6 @@ class SnapshotExtractorPlugin(BlockingPlugin):
         :param issue: issue from minion that need to be checked
         :param target: target having the issue
         """
-        self.logger.debug("checking for {issue}".format(issue=issue))
 
         # Check title of the issue
         for wanted in self.wanted_issues:
@@ -353,14 +352,30 @@ class SnapshotExtractorPlugin(BlockingPlugin):
             host = urlparse.urlparse(target).hostname
 
             # Get the ip of the target
+            # TODO extract into a new function
             try:
-                fqdn,null,[myip] = socket.gethostbyaddr(host)
 
-                # Build csv
-                line = {"target": target, "ip": myip, "fqdn": fqdn}
+                physical_name, null, [target_ip] = socket.gethostbyaddr(host)
 
-                # add tags
-                line.update(tags)
+            except Exception as e:
+                self.logger.debug(e)
+                self.logger.info("No RDNS for {t}".format(t=host))
+
+                physical_name = "Not available"
+
+                try:
+                    target_ip = socket.gethostbyname(host)
+                except Exception as e:
+                    target_ip = "error"
+                    self.logger.info("Could not resolve {t}".format(t=host))
+
+            # Build csv
+            line = {"target": target, "ip": target_ip, "fqdn": physical_name}
+
+            # add tags
+            line.update(tags)
+
+            try:
 
                 for key in line.keys():
                     if line[key] and type(line[key]) is unicode:
@@ -409,27 +424,40 @@ class SnapshotExtractorPlugin(BlockingPlugin):
 
             # Get the ip of the target
             try:
-                fqdn, null, [myip] = socket.gethostbyaddr(host)
+                physical_name, null, [target_ip] = socket.gethostbyaddr(host)
 
-                # Build csv
-                line = {"target": target, "ip": myip, "fqdn": fqdn}
+            except Exception as e:
+                self.logger.debug(e)
+                self.logger.info("No RDNS for {t}".format(t=host))
 
-                # add tags
-                line.update(tags)
+                physical_name = "Not available"
 
-                # get count result
-                summary =self.found[target]
+                try:
+                    target_ip = socket.gethostbyname(host)
+                except Exception as e:
+                    target_ip = "error"
+                    self.logger.info("Could not resolve {t}".format(t=host))
 
-                # Avoid null result if needed
-                if self.ignore_null:
-                    total = sum(summary.values())
+            # Build csv
+            line = {"target": target, "ip": target_ip, "fqdn": physical_name}
 
-                    if total == 0:
-                        continue
+            # add tags
+            line.update(tags)
 
-                # Add results
-                line.update(summary)
+            # get count result
+            summary = self.found[target]
 
+            # Avoid null result if needed
+            if self.ignore_null:
+                total = sum(summary.values())
+
+                if total == 0:
+                    continue
+
+            # Add results
+            line.update(summary)
+
+            try:
                 for key in line.keys():
                     if line[key] and type(line[key]) is unicode:
                         line[key] = line[key].encode("utf8")

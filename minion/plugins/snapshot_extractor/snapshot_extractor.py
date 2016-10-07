@@ -316,8 +316,8 @@ class SnapshotExtractorPlugin(BlockingPlugin):
         if target not in self.found:
             # Create counters
             counts = {}
-            for key in self.type_issue.keys():
-                counts[key] = 0
+            for sev in self.type_issue:
+                counts[sev] = 0
 
             self.found[target] = counts
 
@@ -349,8 +349,6 @@ class SnapshotExtractorPlugin(BlockingPlugin):
             # Get tags for target
             tags = self.fetch_tags(target)
 
-            self.logger.debug("tags for {t} : {ta}".format(t=target, ta=tags))
-
             # Clean the target for resolution
             host = urlparse.urlparse(target).hostname
 
@@ -364,6 +362,10 @@ class SnapshotExtractorPlugin(BlockingPlugin):
                 # add tags
                 line.update(tags)
 
+                for key in line.keys():
+                    if line[key] and type(line[key]) is unicode:
+                        line[key] = line[key].encode("utf8")
+
                 # Add issue detail if needed
                 if self.detail_issues:
                     for issue in self.found[target]:
@@ -376,7 +378,7 @@ class SnapshotExtractorPlugin(BlockingPlugin):
 
             except Exception as e:
                 self.logger.debug(e)
-                msg = "Could not resolve ip from {target}".format(target=host)
+                msg = "Could not write line for {target}".format(target=host)
                 self.logger.info(msg)
                 continue
 
@@ -392,6 +394,8 @@ class SnapshotExtractorPlugin(BlockingPlugin):
 
         # Add type of severity
         fields.extend(self.type_issue)
+
+        self.logger.debug("Field used {f}".format(f=fields))
 
         # Open csv
         writer = self.open_csv(fields)
@@ -426,11 +430,16 @@ class SnapshotExtractorPlugin(BlockingPlugin):
                 # Add results
                 line.update(summary)
 
+                for key in line.keys():
+                    if line[key] and type(line[key]) is unicode:
+                        line[key] = line[key].encode("utf8")
+
                 writer.writerow(line)
 
             except Exception as e:
-                msg = "Could not resolve ip from {target}".format(target=host)
+                msg = "Could not write line for {target}".format(target=host)
                 self.logger.info(msg)
+                self.logger.debug(e)
                 continue
 
     def fetch_tags(self, target):

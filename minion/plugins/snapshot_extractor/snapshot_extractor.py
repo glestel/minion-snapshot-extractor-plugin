@@ -416,6 +416,17 @@ class SnapshotExtractorPlugin(BlockingPlugin):
         writer = self.open_csv(fields)
 
         for target in self.found:
+            # get count result
+            summary = self.found[target]
+
+            # Avoid null result if needed
+            if self.ignore_null:
+                total = sum(summary.values())
+
+                if total == 0:
+                    self.logger.debug("Null result for {t}".format(t=target))
+                    continue
+
             # Get tags for target
             tags = self.fetch_tags(target)
 
@@ -443,16 +454,6 @@ class SnapshotExtractorPlugin(BlockingPlugin):
 
             # add tags
             line.update(tags)
-
-            # get count result
-            summary = self.found[target]
-
-            # Avoid null result if needed
-            if self.ignore_null:
-                total = sum(summary.values())
-
-                if total == 0:
-                    continue
 
             # Add results
             line.update(summary)

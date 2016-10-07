@@ -94,7 +94,7 @@ class SnapshotExtractorPlugin(BlockingPlugin):
         # self.logger.critical('critical message')
 
     def start_mongo_connexion(self):
-        self.mongodb = MongoClient(host=self.MONGO_HOST, port=self.MONGO_PORT)
+        self.mongodb = MongoClient(host=self.MONGO_HOST, port=self.MONGO_PORT).minion
 
     def open_csv(self, fields):
         """
@@ -125,7 +125,7 @@ class SnapshotExtractorPlugin(BlockingPlugin):
         }
 
         self._save_artifacts()
-        self._finish_with_failure(failure)
+        self.report_finish("FAILED", failure)
 
     def do_run(self):
         # Get the path to save output
@@ -179,6 +179,7 @@ class SnapshotExtractorPlugin(BlockingPlugin):
 
             # Set action function
             self.planned_action = self.find_issue
+            self.csv_creator = self.find_to_csv
 
         elif action == "count":
             # Get the severity of issues needed (mandatory option)
@@ -196,13 +197,20 @@ class SnapshotExtractorPlugin(BlockingPlugin):
 
             # Set action function for issue browsing
             self.planned_action = self.count_issue
-            self.csv_creator = self.find_to_csv
+            self.csv_creator = self.count_to_csv
+
+        # Initialize db connexion
+        self.start_mongo_connexion()
 
         # Get list of concerned targets
         targets = self.find_targets()
 
+        self.logger.debug("Found {nb} targets for checking".format(nb=len(targets)))
+
         # Lookup in last scan for wanted issue
         self.search_targets(targets)
+
+        self.logger.debug("Found {nb} results after checking".format(nb=len(self.found)))
 
         # Create csv
         self.csv_creator()
@@ -211,7 +219,6 @@ class SnapshotExtractorPlugin(BlockingPlugin):
         self.logger.info("Extract over")
 
         self._save_artifacts()
-
 
     def find_targets(self):
         """
@@ -229,16 +236,18 @@ class SnapshotExtractorPlugin(BlockingPlugin):
                 # Check request worked
                 try:
                     r.raise_for_status()
+                    res = r.json()["group"]['sites']
+                    targets.update(res)
+
                 except Exception as e:
                     msg = "Error occurred while retrieving targets for group {group}".format(group=group)
                     self.logger.error(msg)
                     self.logger.error(e.message)
                     self.report_error(msg, e.message)
 
-                targets.update(r.json()["group"]['sites'])
         else:
             # Get all targets from database
-            for target in self.mongodb.db.sites.find():
+            for target in self.mongodb.sites.find():
                 url = target.get('url')
                 targets.add(url)
 
@@ -254,21 +263,24 @@ class SnapshotExtractorPlugin(BlockingPlugin):
 
         for target in targets:
             for plan in self.plan_scope:
-                list_scan = list(self.mongodb.db.scans.find({'configuration.target': target, 'plan.name': plan})
+                list_scan = list(self.mongodb.scans.find({'configuration.target': target, 'plan.name': plan})
                                  .sort("created", -1))
 
                 # Check at least one scan has been run
                 if len(list_scan) == 0:
+                    self.logger.debug("No scan result for {t} with {p}".format(t=target, p=plan))
                     continue
 
                 last_scan = list_scan[0]
+
+                self.logger.debug("Inspecting {t} with {p}".format(t=target, p=plan))
 
                 # Browse each session in last scan
                 for session in last_scan['sessions']:
                     # Get each issue in last scan (in each session)
                     for issue in session['issues']:
                         # Find info about the issue
-                        full_issue = self.mongodb.db.issues.find_one({"Id": issue})
+                        full_issue = self.mongodb.issues.find_one({"Id": issue})
 
                         # Check that the issue is active
                         if full_issue["Status"] == "Current" and \
@@ -282,6 +294,8 @@ class SnapshotExtractorPlugin(BlockingPlugin):
         :param issue: issue from minion that need to be checked
         :param target: target having the issue
         """
+        self.logger.debug("checking for {issue}".format(issue=issue))
+
         # Check title of the issue
         for wanted in self.wanted_issues:
             if wanted in issue["Summary"]:
@@ -290,6 +304,7 @@ class SnapshotExtractorPlugin(BlockingPlugin):
                     self.found[target] = [issue["Summary"]]
                 else:
                     self.found[target].append(issue["Summary"])
+                self.logger.debug("Found one issue : {iss}".format(iss=issue["Summary"]))
 
     def count_issue(self, issue, target):
         """
@@ -334,6 +349,8 @@ class SnapshotExtractorPlugin(BlockingPlugin):
             # Get tags for target
             tags = self.fetch_tags(target)
 
+            self.logger.debug("tags for {t} : {ta}".format(t=target, ta=tags))
+
             # Clean the target for resolution
             host = urlparse.urlparse(target).hostname
 
@@ -358,6 +375,7 @@ class SnapshotExtractorPlugin(BlockingPlugin):
                     writer.writerow(line)
 
             except Exception as e:
+                self.logger.debug(e)
                 msg = "Could not resolve ip from {target}".format(target=host)
                 self.logger.info(msg)
                 continue
@@ -436,14 +454,17 @@ class SnapshotExtractorPlugin(BlockingPlugin):
             self.logger.error(e.message)
             self.report_error(msg, e.message)
 
-        existing_tags = r.json()["sites"][0]["tags"]
+        filtered_tags = {}
 
-        # Build result
-        res = {}
-        for tag in self.target_tags:
-            res[tag] = existing_tags.get(tag)
+        res = r.json()["sites"][0]
+        if "tags" in res:
+            existing_tags = res["tags"]
 
-        return res
+            # Build result
+            for tag in self.target_tags:
+                filtered_tags[tag] = existing_tags.get(tag)
+
+        return filtered_tags
 
     def do_stop(self):
         # Save artifacts
@@ -457,7 +478,7 @@ class SnapshotExtractorPlugin(BlockingPlugin):
         Function used to save output of the plugin
         Must be called before shutting down the plugin
         """
-        output_artifacts = [self.logger_path]
+        output_artifacts = [self.logger_path, self.CSV_FILE]
 
         if output_artifacts:
             self.report_artifacts(self.PLUGIN_NAME, output_artifacts)

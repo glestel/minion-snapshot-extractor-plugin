@@ -9,6 +9,7 @@ import requests
 import socket
 import urlparse
 import uuid
+import json
 
 from minion.plugins.base import BlockingPlugin
 from pymongo import MongoClient
@@ -26,8 +27,11 @@ class SnapshotExtractorPlugin(BlockingPlugin):
     schedule_stderr = ""
     logger = None
     logger_path = ""
-
+    
+    #targets for an everywhere use
+    targets = []
     CSV_FILE = "extract.csv"
+    JSON_FILE = "extract.json"
 
     MONGO_HOST = '127.0.0.1'
     MONGO_PORT = 27017
@@ -44,14 +48,17 @@ class SnapshotExtractorPlugin(BlockingPlugin):
     """:type : list[str]    Array of tags linked to the target"""
     target_tags = []
 
-    """:type : list[str]    type of severity of issues needed for extract"""
-    type_issue = []
+    """:text : list[str]    text of issues needed for extract"""
+    texts_issues = []
+    """:colon : list[str]   colon of issues needed for extract"""
+    colons_issues = []
     """:type : bool         remove target with zero count"""
     ignore_null = True
 
     available_actions = ["count", "find"]
     planned_action = None
     csv_creator = None
+    json_creator = None
 
     """
     :type : dict
@@ -59,7 +66,7 @@ class SnapshotExtractorPlugin(BlockingPlugin):
     aggregation of results that will be in the extract, two format possible according to action
     count :
         {
-            target: {severity: 0, }
+            target: {text: 0, }
         }
 
     find :
@@ -134,6 +141,7 @@ class SnapshotExtractorPlugin(BlockingPlugin):
         # FIXME add date to file name
         self.logger_path = "{dir}logging_{output}.txt".format(dir=self.report_dir, output=self.output_id)
         self.CSV_FILE = "{dir}extract_{output}.csv".format(dir=self.report_dir, output=self.output_id)
+        self.JSON_FILE = "{dir}extract_{output}.json".format(dir=self.report_dir, output=self.output_id)
 
         # start logger
         self.initialize_logger()
@@ -163,7 +171,11 @@ class SnapshotExtractorPlugin(BlockingPlugin):
         # Check action is possible
         if action not in self.available_actions:
             self.report_error("No or wrong action defined for extract", "Missing argument")
-
+        # Get the colon of issues needed (mandatory option)
+        if "colons_issues" in self.configuration:
+            self.colons_issues = self.configuration.get('colons_issues')
+            self.logger.debug("Colon  issues set to {colon}".format(colon=self.colons_issues))
+            
         if action == "find":
             # Get the wanted issues (mandatory option)
             if "wanted_issues" in self.configuration:
@@ -180,24 +192,26 @@ class SnapshotExtractorPlugin(BlockingPlugin):
             # Set action function
             self.planned_action = self.find_issue
             self.csv_creator = self.find_to_csv
+            self.json_creator = self.find_to_json
 
         elif action == "count":
-            # Get the severity of issues needed (mandatory option)
-            if "type_issue" in self.configuration:
-                self.type_issue = self.configuration.get('type_issue')
-                self.logger.debug("Type issues set to {type}".format(type=self.type_issue))
+            # Get the texts of issues needed (mandatory option)
+            if "texts_issues" in self.configuration:
+                self.texts_issues = self.configuration.get('texts_issues')
+                self.logger.debug("Text issues set to {text}".format(text=self.texts_issues))
 
             # Get the ignore null flag
             if "ignore_null" in self.configuration:
                 self.ignore_null = self.configuration.get('ignore_null')
                 self.logger.debug("ignore_null set to {flag}".format(flag=self.ignore_null))
 
-            if not self.type_issue:
+            if not self.texts_issues:
                 self.report_error("No issue type defined for extract", "Missing argument")
 
             # Set action function for issue browsing
             self.planned_action = self.count_issue
             self.csv_creator = self.count_to_csv
+            self.json_creator = self.count_to_json
 
         # Initialize db connexion
         self.start_mongo_connexion()
@@ -214,6 +228,9 @@ class SnapshotExtractorPlugin(BlockingPlugin):
 
         # Create csv
         self.csv_creator()
+
+        # Create json
+        self.json_creator()
 
         # Exit
         self.logger.info("Extract over")
@@ -250,7 +267,7 @@ class SnapshotExtractorPlugin(BlockingPlugin):
             for target in self.mongodb.sites.find():
                 url = target.get('url')
                 targets.add(url)
-
+        self.targets = targets
         return list(targets)
 
     def search_targets(self, targets):
@@ -295,15 +312,17 @@ class SnapshotExtractorPlugin(BlockingPlugin):
         :param target: target having the issue
         """
 
-        # Check title of the issue
-        for wanted in self.wanted_issues:
-            if wanted in issue["Summary"]:
-                # Add the winner to the found list
-                if target not in self.found:
-                    self.found[target] = [issue["Summary"]]
-                else:
-                    self.found[target].append(issue["Summary"])
-                self.logger.debug("Found one issue : {iss}".format(iss=issue["Summary"]))
+        
+        for colon in self.colons_issues:
+            # Check title of the issue
+            for wanted in self.wanted_issues:
+                if wanted in issue[colon]:
+                    # Add the winner to the found list
+                    if target not in self.found:
+                        self.found[target] = [issue[colon]]
+                    else:
+                        self.found[target].append(issue[colon])
+                    self.logger.debug("Found one issue : {iss}".format(iss=issue[colon]))
 
     def count_issue(self, issue, target):
         """
@@ -315,18 +334,80 @@ class SnapshotExtractorPlugin(BlockingPlugin):
         if target not in self.found:
             # Create counters
             counts = {}
-            for sev in self.type_issue:
+            for sev in self.texts_issues:
                 counts[sev] = 0
 
             self.found[target] = counts
 
-        # Get severity of the issue
-        severity = issue["Severity"]
+        
+        for colon in self.colons_issues:
+            # Get text of the issue
+            text_cell = issue[colon]
+            # Check if we have a winner
+            
+            for text_issue in self.texts_issues:
+                if text_cell in text_issue:
+                    self.found[target][text_issue] += 1
 
-        # Check if we have a winner
-        if severity in self.type_issue:
-            self.found[target][severity] += 1
+    def count_to_json(self):
 
+        data = {}
+        sum_found = 0
+        sum_targets = 0
+        sum_tested_targets = 0
+        text_file = open(self.JSON_FILE, "w");
+        for target in self.found:
+            summary = self.found[target]
+            total = sum(summary.values())
+            sum_found+=total
+            
+            sum_tested_targets+=1
+            if self.ignore_null:
+
+                if total == 0:
+                    self.logger.debug("Null result for {t}".format(t=target))
+                    continue
+            host = urlparse.urlparse(target).hostname
+            getip=self.get_ip_of_target(host)
+            
+            sum_targets+=1
+            data.__setitem__(host,{
+                    "host":host
+                    ,"target_ip":getip[0]
+                    ,"url":target
+                    ,"physical_name":getip[1]
+                    ,"found":summary
+                    ,"total":total
+                })
+        data.__setitem__("sum_targets",sum_targets)
+        data.__setitem__("sum_tested_targets",sum_tested_targets)
+        data.__setitem__("sum_found",sum_found)
+        text_file.write(json.dumps(data))
+        text_file.close()
+        
+    
+    def find_to_json(self):
+        data = {}
+        sum_targets = 0
+        text_file = open(self.JSON_FILE, "w");
+        for target in self.found:
+            host = urlparse.urlparse(target).hostname
+            getip=self.get_ip_of_target(host)
+            
+            sum_targets+=1
+            data.__setitem__(host,{
+                    "host":host
+                    ,"url":target
+                    ,"target_ip":getip[0]
+                    ,"fqdn":getip[1]
+                    ,"issues":self.found[target]
+                })
+        data.__setitem__("sum_found_targets",sum_targets)
+        data.__setitem__("sum_tested_targets",len(self.targets))
+        text_file.write(json.dumps(data))
+        text_file.close()
+        
+    
     def find_to_csv(self):
         """
         Generate the CSV from the search of issues
@@ -351,23 +432,10 @@ class SnapshotExtractorPlugin(BlockingPlugin):
             # Clean the target for resolution
             host = urlparse.urlparse(target).hostname
 
-            # Get the ip of the target
-            # TODO extract into a new function
-            try:
 
-                physical_name, null, [target_ip] = socket.gethostbyaddr(host)
-
-            except Exception as e:
-                self.logger.debug(e)
-                self.logger.info("No RDNS for {t}".format(t=host))
-
-                physical_name = "Not available"
-
-                try:
-                    target_ip = socket.gethostbyname(host)
-                except Exception as e:
-                    target_ip = "error"
-                    self.logger.info("Could not resolve {t}".format(t=host))
+            getip=self.get_ip_of_target(host)
+            target_ip =getip[0]
+            physical_name = getip[1]
 
             # Build csv
             line = {"target": target, "ip": target_ip, "fqdn": physical_name}
@@ -397,44 +465,13 @@ class SnapshotExtractorPlugin(BlockingPlugin):
                 self.logger.info(msg)
                 continue
 
-    def count_to_csv(self):
-        """
-        Generate the CSV from the count of issues
-        """
-        # Build header
-        fields = ["target", "ip", "fqdn"]
 
-        # Add tags
-        fields.extend(self.target_tags)
-
-        # Add type of severity
-        fields.extend(self.type_issue)
-
-        self.logger.debug("Field used {f}".format(f=fields))
-
-        # Open csv
-        writer = self.open_csv(fields)
-
-        for target in self.found:
-            # get count result
-            summary = self.found[target]
-
-            # Avoid null result if needed
-            if self.ignore_null:
-                total = sum(summary.values())
-
-                if total == 0:
-                    self.logger.debug("Null result for {t}".format(t=target))
-                    continue
-
-            # Get tags for target
-            tags = self.fetch_tags(target)
-
-            # Clean the target for resolution
-            host = urlparse.urlparse(target).hostname
-
+    def get_ip_of_target(self,host):
             # Get the ip of the target
+            target_ip=""
+            physical_name=""
             try:
+
                 physical_name, null, [target_ip] = socket.gethostbyaddr(host)
 
             except Exception as e:
@@ -448,6 +485,43 @@ class SnapshotExtractorPlugin(BlockingPlugin):
                 except Exception as e:
                     target_ip = "error"
                     self.logger.info("Could not resolve {t}".format(t=host))
+            return target_ip,physical_name
+
+    def count_to_csv(self):
+        """
+        Generate the CSV from the count of issues
+        """
+        # Build header
+        fields = ["target", "ip", "fqdn"]
+
+        # Add tags
+        fields.extend(self.target_tags)
+
+        # Add type of issue
+        fields.extend(self.texts_issues)
+
+        self.logger.debug("Field used {f}".format(f=fields))
+        # Open csv
+        writer = self.open_csv(fields)
+        for target in self.found:
+            # get count result
+            summary = self.found[target]
+            # Avoid null result if needed
+            if self.ignore_null:
+                total = sum(summary.values())
+
+                if total == 0:
+                    self.logger.debug("Null result for {t}".format(t=target))
+                    continue
+            # Get tags for target
+            tags = self.fetch_tags(target)
+
+            # Clean the target for resolution
+            host = urlparse.urlparse(target).hostname
+
+            getip=self.get_ip_of_target(host)
+            target_ip=getip[0]
+            physical_name=getip[1]
 
             # Build csv
             line = {"target": target, "ip": target_ip, "fqdn": physical_name}
@@ -516,7 +590,7 @@ class SnapshotExtractorPlugin(BlockingPlugin):
         Function used to save output of the plugin
         Must be called before shutting down the plugin
         """
-        output_artifacts = [self.logger_path, self.CSV_FILE]
+        output_artifacts = [self.logger_path, self.CSV_FILE,self.JSON_FILE]
 
         if output_artifacts:
             self.report_artifacts(self.PLUGIN_NAME, output_artifacts)

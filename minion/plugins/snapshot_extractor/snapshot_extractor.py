@@ -350,18 +350,24 @@ class SnapshotExtractorPlugin(BlockingPlugin):
                     self.found[target][text_issue] += 1
 
     def count_to_json(self):
-
+        """
+        Generate the JSON from the count of issues
+        """
+        #dictionary of data
         data = {}
         sum_found = 0
         sum_targets = 0
         sum_tested_targets = 0
         text_file = open(self.JSON_FILE, "w");
+        
+        
         for target in self.found:
             summary = self.found[target]
             total = sum(summary.values())
             sum_found+=total
             
             sum_tested_targets+=1
+            #ignore nulls
             if self.ignore_null:
 
                 if total == 0:
@@ -371,40 +377,68 @@ class SnapshotExtractorPlugin(BlockingPlugin):
             getip=self.get_ip_of_target(host)
             
             sum_targets+=1
+            #build a data
             data.__setitem__(host,{
                     "host":host
                     ,"target_ip":getip[0]
                     ,"url":target
-                    ,"physical_name":getip[1]
-                    ,"found":summary
-                    ,"total":total
+                    ,"reverse_dns":getip[1]
+                    ,"issues":summary
+                    ,"sum_issues":total
                 })
-        data.__setitem__("sum_targets",sum_targets)
-        data.__setitem__("sum_tested_targets",sum_tested_targets)
-        data.__setitem__("sum_found",sum_found)
-        text_file.write(json.dumps(data))
+        
+        #dictionary of meta
+        meta = {}
+        meta.__setitem__("sum_targets",sum_targets)
+        meta.__setitem__("sum_tested_targets",sum_tested_targets)
+        meta.__setitem__("sum_found_issues",sum_found)
+        
+        #final json structure
+        jsondict = {
+            "meta":meta
+            ,"data":data
+        }
+        text_file.write(json.dumps(jsondict))
         text_file.close()
         
     
     def find_to_json(self):
+        """
+        Generate the JSON from the search of issues
+        """
         data = {}
         sum_targets = 0
+        sum_found_issues = 0
         text_file = open(self.JSON_FILE, "w");
         for target in self.found:
             host = urlparse.urlparse(target).hostname
             getip=self.get_ip_of_target(host)
             
             sum_targets+=1
+            #build a data
+            total_issues = len(self.found[target])
+            sum_found_issues+=total_issues
+            
             data.__setitem__(host,{
                     "host":host
                     ,"url":target
                     ,"target_ip":getip[0]
-                    ,"fqdn":getip[1]
+                    ,"reverse_dns":getip[1]
                     ,"issues":self.found[target]
+                    ,"total_issues":total_issues
                 })
-        data.__setitem__("sum_found_targets",sum_targets)
-        data.__setitem__("sum_tested_targets",len(self.targets))
-        text_file.write(json.dumps(data))
+            
+                
+                
+        meta = {}
+        meta.__setitem__("sum_found_targets",sum_targets)
+        meta.__setitem__("sum_found_issues",sum_found_issues)
+        meta.__setitem__("sum_tested_targets",len(self.targets))
+        jsondict = {
+            "meta":meta
+            ,"data":data
+        }
+        text_file.write(json.dumps(jsondict))
         text_file.close()
         
     

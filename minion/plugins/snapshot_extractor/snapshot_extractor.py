@@ -393,13 +393,14 @@ class SnapshotExtractorPlugin(BlockingPlugin):
 
             # build a data
             data.__setitem__(host, {
-                    "host": host,
-                    "target_ip": get_ip[0],
-                    "url": target,
-                    "reverse_dns": get_ip[1],
-                    "issues": summary,
-                    "sum_issues": total
-                })
+                "host": host,
+                "target_ip": get_ip[0],
+                "url": target,
+                "reverse_dns": get_ip[1],
+                "issues": summary,
+                "sum_issues": total,
+                "tags": self.fetch_tags(target)
+            })
         
         # Create a dictionary of metadata
         meta = {}
@@ -438,16 +439,17 @@ class SnapshotExtractorPlugin(BlockingPlugin):
             # Build info for target
             total_issues = len(self.found[target])
             sum_found_issues += total_issues
-            
-            data.__setitem__(host,{
-                    "host": host,
-                    "url": target,
-                    "target_ip": get_ip[0],
-                    "reverse_dns": get_ip[1],
-                    "issues": self.found[target],
-                    "total_issues": total_issues
-                })
-            
+
+            data.__setitem__(host, {
+                "host": host,
+                "url": target,
+                "target_ip": get_ip[0],
+                "reverse_dns": get_ip[1],
+                "issues": self.found[target],
+                "total_issues": total_issues,
+                "tags": self.fetch_tags(target)
+            })
+
         # Create a dictionary of metadata
         meta = {}
         meta.__setitem__("sum_found_targets", sum_targets)

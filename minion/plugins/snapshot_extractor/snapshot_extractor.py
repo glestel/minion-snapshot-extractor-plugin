@@ -387,12 +387,17 @@ class SnapshotExtractorPlugin(BlockingPlugin):
                     continue
 
             host = urlparse.urlparse(target).hostname
+
+            # Check if target has not been parsed
+            if not host:
+                host = target
+
             get_ip = self.get_network_info_target(host)
             
             sum_targets += 1
 
             # build a data
-            data.__setitem__(host, {
+            data.__setitem__(target, {
                 "host": host,
                 "target_ip": get_ip[0],
                 "url": target,
@@ -432,6 +437,11 @@ class SnapshotExtractorPlugin(BlockingPlugin):
         # Build info for each found target
         for target in self.found:
             host = urlparse.urlparse(target).hostname
+
+            # Check if target has not been parsed
+            if not host:
+                host = target
+
             get_ip = self.get_network_info_target(host)
             
             sum_targets += 1
@@ -440,7 +450,7 @@ class SnapshotExtractorPlugin(BlockingPlugin):
             total_issues = len(self.found[target])
             sum_found_issues += total_issues
 
-            data.__setitem__(host, {
+            data.__setitem__(target, {
                 "host": host,
                 "url": target,
                 "target_ip": get_ip[0],

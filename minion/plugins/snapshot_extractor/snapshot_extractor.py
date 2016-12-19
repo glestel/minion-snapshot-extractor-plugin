@@ -72,12 +72,19 @@ class SnapshotExtractorPlugin(BlockingPlugin):
     aggregation of results that will be in the extract, two format possible according to action
     count :
         {
-            target: {text: 0, }
+            target: {
+                     count_1: 42,
+                     count_2: 0
+                     finished: date(121587844694)
+                     }
+            target_2: {text: 0, }
         }
 
     find :
         {
-            target: ["issue", ]
+            target: {
+                issues: ["issue_1", "issue_2"]
+                finished: date(1234567890)
         }
     """
     found = {}
@@ -325,10 +332,7 @@ class SnapshotExtractorPlugin(BlockingPlugin):
         for row in self.row_labels:
 
             for wanted in self.wanted_issues:
-                '''self.found[target] = {
-                        "issues":[issue[row]]
-                        ,"finished": 121587844694
-                        }'''
+
                 # Check title of the issue
                 if wanted in issue[row]:
                     # Add the winner to the found list
@@ -354,10 +358,7 @@ class SnapshotExtractorPlugin(BlockingPlugin):
             counts = {}
             for sev in self.texts_issues:
                 counts[sev] = 0
-            '''self.found[target] = {
-                             "counts":counts
-                             ,"finished": 121587844694
-                             }'''
+
             self.found[target] = dict(counts=counts, finished=last_scan["finished"])
 
         if last_scan["finished"] > self.found[target]["finished"]:

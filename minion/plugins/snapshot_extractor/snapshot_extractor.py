@@ -27,12 +27,14 @@ class SnapshotExtractorPlugin(BlockingPlugin):
     schedule_stderr = ""
     logger = None
     logger_path = ""
-    
+
     # targets for an everywhere use
     # FIXME clean this global attribute elsewhere
     targets = []
     CSV_FILE = "extract.csv"
     JSON_FILE = "extract.json"
+
+    DATETIME_OUTPUT_FORMAT = "%Y-%m-%d %H:%M:%S.%f"
 
     MONGO_HOST = '127.0.0.1'
     MONGO_PORT = 27017
@@ -180,7 +182,7 @@ class SnapshotExtractorPlugin(BlockingPlugin):
         if "row_labels" in self.configuration:
             self.row_labels = self.configuration.get('row_labels')
             self.logger.debug("Row labels set to {label}".format(label=self.row_labels))
-            
+
         if action == "find":
             # Get the wanted issues (mandatory option)
             if "wanted_issues" in self.configuration:
@@ -308,12 +310,13 @@ class SnapshotExtractorPlugin(BlockingPlugin):
                         # Check that the issue is active
                         if full_issue["Status"] == "Current" and \
                                 not full_issue.get("Ignored") and not full_issue.get("False_positive"):
-                                    # Handle according to research mode
-                                    self.planned_action(full_issue, target)
+                            # Handle according to research mode
+                            self.planned_action(full_issue, target, last_scan)
 
-    def find_issue(self, issue, target):
+    def find_issue(self, issue, target, last_scan):
         """
         Check if issue summary is needed for the extract
+        :param last_scan: The last scan of the plan
         :param issue: issue from minion that need to be checked
         :param target: target having the issue
         """
@@ -322,20 +325,26 @@ class SnapshotExtractorPlugin(BlockingPlugin):
         for row in self.row_labels:
 
             for wanted in self.wanted_issues:
-
+                '''self.found[target] = {
+                        "issues":[issue[row]]
+                        ,"finished": 121587844694
+                        }'''
                 # Check title of the issue
                 if wanted in issue[row]:
                     # Add the winner to the found list
                     if target not in self.found:
-                        self.found[target] = [issue[row]]
+                        self.found[target] = dict(issues=[issue[row]], finished=last_scan['finished'])
                     else:
-                        self.found[target].append(issue[row])
+                        self.found[target]["issues"].append(issue[row])
+                        if last_scan["finished"] > self.found[target]["finished"]:
+                            self.found[target]["finished"] = last_scan["finished"]
 
                     self.logger.debug("Found one issue : {iss}".format(iss=issue[row]))
 
-    def count_issue(self, issue, target):
+    def count_issue(self, issue, target, last_scan):
         """
         Count issue type by target
+        :param last_scan: The last scan of the plan
         :param issue: current minion issue
         :param target: target having the issue
         """
@@ -345,9 +354,14 @@ class SnapshotExtractorPlugin(BlockingPlugin):
             counts = {}
             for sev in self.texts_issues:
                 counts[sev] = 0
+            '''self.found[target] = {
+                             "counts":counts
+                             ,"finished": 121587844694
+                             }'''
+            self.found[target] = dict(counts=counts, finished=last_scan["finished"])
 
-            self.found[target] = counts
-
+        if last_scan["finished"] > self.found[target]["finished"]:
+            self.found[target]["finished"] = last_scan["finished"]
         # Look up in every specified row
         for row in self.row_labels:
             # Get text of the issue
@@ -356,7 +370,7 @@ class SnapshotExtractorPlugin(BlockingPlugin):
             # Check if we have a winner
             for text_issue in self.texts_issues:
                 if text_issue in text_cell:
-                    self.found[target][text_issue] += 1
+                    self.found[target]["counts"][text_issue] += 1
 
     def count_to_json(self):
         """
@@ -368,15 +382,15 @@ class SnapshotExtractorPlugin(BlockingPlugin):
         sum_targets = 0
         sum_tested_targets = 0
         text_file = open(self.JSON_FILE, "w")
-        
+
         # Build info for each found target
         for target in self.found:
-            summary = self.found[target]
+            summary = self.found[target]["counts"]
 
             # Sum issues for every find of the target
             total = sum(summary.values())
             sum_found += total
-            
+
             sum_tested_targets += 1
 
             # Drop result where count is null if needed
@@ -393,7 +407,7 @@ class SnapshotExtractorPlugin(BlockingPlugin):
                 host = target
 
             get_ip = self.get_network_info_target(host)
-            
+
             sum_targets += 1
 
             # build a data
@@ -404,15 +418,16 @@ class SnapshotExtractorPlugin(BlockingPlugin):
                 "reverse_dns": get_ip[1],
                 "issues": summary,
                 "sum_issues": total,
-                "tags": self.fetch_tags(target)
+                "tags": self.fetch_tags(target),
+                "finished": self.found[target]["finished"].strftime(self.DATETIME_OUTPUT_FORMAT)
             })
-        
+
         # Create a dictionary of metadata
         meta = {}
-        meta.__setitem__("sum_targets",sum_targets)
-        meta.__setitem__("sum_tested_targets",sum_tested_targets)
-        meta.__setitem__("sum_found_issues",sum_found)
-        
+        meta.__setitem__("sum_targets", sum_targets)
+        meta.__setitem__("sum_tested_targets", sum_tested_targets)
+        meta.__setitem__("sum_found_issues", sum_found)
+
         # Build final json structure
         json_dict = {
             "meta": meta,
@@ -443,7 +458,7 @@ class SnapshotExtractorPlugin(BlockingPlugin):
                 host = target
 
             get_ip = self.get_network_info_target(host)
-            
+
             sum_targets += 1
 
             # Build info for target
@@ -455,9 +470,10 @@ class SnapshotExtractorPlugin(BlockingPlugin):
                 "url": target,
                 "target_ip": get_ip[0],
                 "reverse_dns": get_ip[1],
-                "issues": self.found[target],
+                "issues": self.found[target]["issues"],
                 "total_issues": total_issues,
-                "tags": self.fetch_tags(target)
+                "tags": self.fetch_tags(target),
+                "finished": self.found[target]["finished"].strftime(self.DATETIME_OUTPUT_FORMAT)
             })
 
         # Create a dictionary of metadata
@@ -473,7 +489,7 @@ class SnapshotExtractorPlugin(BlockingPlugin):
         }
         text_file.write(json.dumps(json_dict))
         text_file.close()
-        
+
     def find_to_csv(self):
         """
         Generate the CSV from the search of issues
@@ -499,7 +515,7 @@ class SnapshotExtractorPlugin(BlockingPlugin):
             host = urlparse.urlparse(target).hostname
 
             get_ip = self.get_network_info_target(host)
-            target_ip =get_ip[0]
+            target_ip = get_ip[0]
             physical_name = get_ip[1]
 
             # Build csv
@@ -516,7 +532,7 @@ class SnapshotExtractorPlugin(BlockingPlugin):
 
                 # Add issue detail if needed
                 if self.detail_issues:
-                    for issue in self.found[target]:
+                    for issue in self.found[target]["issues"]:
                         to_write = line.copy()
                         to_write["issue"] = issue
 
@@ -548,7 +564,7 @@ class SnapshotExtractorPlugin(BlockingPlugin):
         writer = self.open_csv(fields)
         for target in self.found:
             # get count result
-            summary = self.found[target]
+            summary = self.found[target]["counts"]
             # Avoid null result if needed
             if self.ignore_null:
                 total = sum(summary.values())
@@ -661,9 +677,7 @@ class SnapshotExtractorPlugin(BlockingPlugin):
         Function used to save output of the plugin
         Must be called before shutting down the plugin
         """
-        output_artifacts = [self.logger_path, self.CSV_FILE,self.JSON_FILE]
+        output_artifacts = [self.logger_path, self.CSV_FILE, self.JSON_FILE]
 
         if output_artifacts:
             self.report_artifacts(self.PLUGIN_NAME, output_artifacts)
-
-

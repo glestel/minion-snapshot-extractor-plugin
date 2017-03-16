@@ -400,6 +400,11 @@ class SnapshotExtractorPlugin(BlockingPlugin):
         :param target: target having the issue
         """
 
+        # Check the issue concerns open port
+        if "Ports" not in issue:
+            self.logger.debug("Issue had not defined port : {iss}".format(iss=issue["Summary"]))
+            return
+
         # Get ip of the involved target
         ip = issue["URLs"][0]["URL"]
 
@@ -565,7 +570,6 @@ class SnapshotExtractorPlugin(BlockingPlugin):
                 "reverse_dns": get_ip[1],
                 "open_port": self.found[target]["ports"],
                 "total_issues": total_issues,
-                "tags": self.fetch_tags(target),
                 "finished": self.found[target]["finished"].strftime(self.DATETIME_OUTPUT_FORMAT)
             })
 
@@ -588,7 +592,7 @@ class SnapshotExtractorPlugin(BlockingPlugin):
         Generate the CSV from the search of issues
         """
         # Build header
-        fields = ["ip", "fqdn", "port"]
+        fields = ["ip", "fqdn", "port", "seen"]
 
         # Add tags
         #fields.extend(self.target_tags)
@@ -606,7 +610,8 @@ class SnapshotExtractorPlugin(BlockingPlugin):
             physical_name = get_ip[1]
 
             # Build csv
-            line = {"ip": target, "fqdn": physical_name}
+            line = {"ip": target, "fqdn": physical_name, "seen":
+                    self.found[target]["finished"].strftime(self.DATETIME_OUTPUT_FORMAT)}
 
             # add tags
             #line.update(tags)

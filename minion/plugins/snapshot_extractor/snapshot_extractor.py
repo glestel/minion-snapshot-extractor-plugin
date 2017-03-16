@@ -59,7 +59,10 @@ class SnapshotExtractorPlugin(BlockingPlugin):
     """:type : bool         remove target with zero count"""
     ignore_null = True
 
-    available_actions = ["count", "find"]
+    """:type : list[str]    state of issue wanted, default is current, but can be FalsePositive, Fixed or Ignored"""
+    issue_state = ["Current"]
+
+    available_actions = ["count", "find", "port"]
 
     # Function pointers used for processing according to action
     planned_action = None
@@ -84,6 +87,12 @@ class SnapshotExtractorPlugin(BlockingPlugin):
         {
             target: {
                 issues: ["issue_1", "issue_2"]
+                finished: date(1234567890)
+        }
+    port :
+        {
+            ip: {
+                ports: [80, 443, 8080]
                 finished: date(1234567890)
         }
     """
@@ -190,6 +199,11 @@ class SnapshotExtractorPlugin(BlockingPlugin):
             self.row_labels = self.configuration.get('row_labels')
             self.logger.debug("Row labels set to {label}".format(label=self.row_labels))
 
+        # Get the state of the issue wanted
+        if "issue_state" in self.configuration:
+            self.issue_state = self.configuration.get('issue_state')
+            self.logger.debug("Issue state set to {label}".format(label=self.issue_state))
+
         if action == "find":
             # Get the wanted issues (mandatory option)
             if "wanted_issues" in self.configuration:
@@ -227,6 +241,12 @@ class SnapshotExtractorPlugin(BlockingPlugin):
             self.planned_action = self.count_issue
             self.csv_creator = self.count_to_csv
             self.json_creator = self.count_to_json
+
+        elif action == "port":
+            # Set action function for port finding
+            self.planned_action = self.find_port
+            self.csv_creator = self.port_to_csv
+            self.json_creator = self.port_to_json
 
         # Initialize db connexion
         self.start_mongo_connexion()
@@ -314,9 +334,8 @@ class SnapshotExtractorPlugin(BlockingPlugin):
                         # Find info about the issue
                         full_issue = self.mongodb.issues.find_one({"Id": issue})
 
-                        # Check that the issue is active
-                        if full_issue["Status"] == "Current" and \
-                                not full_issue.get("Ignored") and not full_issue.get("False_positive"):
+                        # Check that the issue has the needed state
+                        if full_issue["Status"] in self.issue_state:
                             # Handle according to research mode
                             self.planned_action(full_issue, target, last_scan)
 
@@ -372,6 +391,29 @@ class SnapshotExtractorPlugin(BlockingPlugin):
             for text_issue in self.texts_issues:
                 if text_issue in text_cell:
                     self.found[target]["counts"][text_issue] += 1
+
+    def find_port(self, issue, target, last_scan):
+        """
+        Find open port in network scan
+        :param last_scan: The last scan of the plan
+        :param issue: issue from minion that need to be checked
+        :param target: target having the issue
+        """
+
+        # Get ip of the involved target
+        ip = issue["URLs"][0]["URL"]
+
+        # Add ports found with initialization if needed
+        if ip not in self.found:
+            self.found[ip] = dict(ports=issue["Ports"], finished=last_scan['finished'])
+        else:
+            self.found[ip]["ports"].extend(issue["Ports"])
+
+            # Update timestamp
+            if last_scan["finished"] > self.found[ip]["finished"]:
+                self.found[ip]["finished"] = last_scan["finished"]
+
+        self.logger.debug("Found open ports : {iss}".format(iss=issue["Ports"]))
 
     def count_to_json(self):
         """
@@ -490,6 +532,103 @@ class SnapshotExtractorPlugin(BlockingPlugin):
         }
         text_file.write(json.dumps(json_dict))
         text_file.close()
+
+    def port_to_json(self):
+        """
+        Generate the JSON from the search of open port
+        """
+        # Dictionary used to build the data to dump in json
+        data = {}
+
+        sum_targets = 0
+        sum_found_issues = 0
+        text_file = open(self.JSON_FILE, "w")
+
+        # Build info for each found target
+        for target in self.found:
+            host = urlparse.urlparse(target).hostname
+
+            # Check if target has not been parsed
+            if not host:
+                host = target
+
+            get_ip = self.get_network_info_target(host)
+
+            sum_targets += 1
+
+            # Build info for target
+            total_issues = len(self.found[target]["ports"])
+            sum_found_issues += total_issues
+
+            data.__setitem__(target, {
+                "target_ip": target,
+                "reverse_dns": get_ip[1],
+                "open_port": self.found[target]["ports"],
+                "total_issues": total_issues,
+                "tags": self.fetch_tags(target),
+                "finished": self.found[target]["finished"].strftime(self.DATETIME_OUTPUT_FORMAT)
+            })
+
+        # Create a dictionary of metadata
+        meta = {}
+        meta.__setitem__("sum_found_targets", sum_targets)
+        meta.__setitem__("sum_found_issues", sum_found_issues)
+        meta.__setitem__("sum_tested_targets", len(self.targets))
+
+        # Build dump result
+        json_dict = {
+            "meta": meta,
+            "data": data
+        }
+        text_file.write(json.dumps(json_dict))
+        text_file.close()
+
+    def port_to_csv(self):
+        """
+        Generate the CSV from the search of issues
+        """
+        # Build header
+        fields = ["ip", "fqdn", "port"]
+
+        # Add tags
+        #fields.extend(self.target_tags)
+
+        # Open csv
+        writer = self.open_csv(fields)
+
+        for target in self.found:
+            # Get tags for target
+            #tags = self.fetch_tags(target)
+
+            # Clean the target for resolution
+
+            get_ip = self.get_network_info_target(target)
+            physical_name = get_ip[1]
+
+            # Build csv
+            line = {"ip": target, "fqdn": physical_name}
+
+            # add tags
+            #line.update(tags)
+
+            try:
+                # Normalize string for encoding
+                for key in line.keys():
+                    if line[key] and type(line[key]) is unicode:
+                        line[key] = line[key].encode("utf8")
+
+                # Add every port found
+                for issue in self.found[target]["ports"]:
+                    to_write = line.copy()
+                    to_write["port"] = issue
+
+                    writer.writerow(to_write)
+
+            except Exception as e:
+                self.logger.debug(e)
+                msg = "Could not write line for {target}".format(target=target)
+                self.logger.info(msg)
+                continue
 
     def find_to_csv(self):
         """

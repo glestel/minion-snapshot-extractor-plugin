@@ -34,6 +34,9 @@ class SnapshotExtractorPlugin(BlockingPlugin):
     CSV_FILE = "extract.csv"
     JSON_FILE = "extract.json"
 
+    # file to upload as scan result
+    artifacts = []
+
     DATETIME_OUTPUT_FORMAT = "%Y-%m-%d %H:%M:%S.%f"
 
     MONGO_HOST = '127.0.0.1'
@@ -62,7 +65,7 @@ class SnapshotExtractorPlugin(BlockingPlugin):
     """:type : list[str]    state of issue wanted, default is current, but can be FalsePositive, Fixed or Ignored"""
     issue_state = ["Current"]
 
-    available_actions = ["count", "find", "port"]
+    available_actions = ["count", "find", "port", "list"]
 
     # Function pointers used for processing according to action
     planned_action = None
@@ -86,7 +89,13 @@ class SnapshotExtractorPlugin(BlockingPlugin):
     find :
         {
             target: {
-                issues: ["issue_1", "issue_2"]
+                issues: ["issue_1", "issue_2", ...]
+                finished: date(1234567890)
+        }
+    list : 
+        {
+            target: {
+                issues: [{full_issue: "foo", full_issuetxt: "bar"}, {...}]
                 finished: date(1234567890)
         }
     port :
@@ -167,6 +176,7 @@ class SnapshotExtractorPlugin(BlockingPlugin):
 
         # start logger
         self.initialize_logger()
+        self.artifacts.append(self.logger_path)
 
         # Get the groups where to look for issues, if empty every group will be searched
         if "group_scope" in self.configuration:
@@ -221,6 +231,17 @@ class SnapshotExtractorPlugin(BlockingPlugin):
             # Set action function
             self.planned_action = self.find_issue
             self.csv_creator = self.find_to_csv
+            self.json_creator = self.find_to_json
+
+        elif action == "list":
+            # Get the wanted issues (mandatory option)
+            if "wanted_issues" in self.configuration:
+                self.wanted_issues = self.configuration.get('wanted_issues')
+                self.logger.debug("Wanted issues set to {wanted}".format(wanted=self.wanted_issues))
+
+            # Set action function for issue browsing
+            self.planned_action = self.list_issue
+            self.csv_creator = self.list_to_csv
             self.json_creator = self.find_to_json
 
         elif action == "count":
@@ -364,6 +385,34 @@ class SnapshotExtractorPlugin(BlockingPlugin):
 
                     self.logger.debug("Found one issue : {iss}".format(iss=issue[row]))
 
+    def list_issue(self, issue, target, last_scan):
+        """
+        Check if issue summary is needed for the extract
+        :param last_scan: The last scan of the plan
+        :param issue: issue from minion that need to be checked
+        :param target: target having the issue
+        """
+
+        # Look ip in every row specified
+        for row in self.row_labels:
+
+            for wanted in self.wanted_issues:
+
+                # Check title of the issue
+                if wanted in issue[row]:
+                    # Clean issue
+                    if '_id' in issue:
+                        issue.pop('_id')
+                    # Add the winner to the found list
+                    if target not in self.found:
+                        self.found[target] = dict(issues=[issue], finished=last_scan['finished'])
+                    else:
+                        self.found[target]["issues"].append(issue)
+                        if last_scan["finished"] > self.found[target]["finished"]:
+                            self.found[target]["finished"] = last_scan["finished"]
+
+                    self.logger.debug("Found one issue : {iss}".format(iss=issue[row]))
+
     def count_issue(self, issue, target, last_scan):
         """
         Count issue type by target
@@ -486,6 +535,8 @@ class SnapshotExtractorPlugin(BlockingPlugin):
         text_file.write(json.dumps(json_dict))
         text_file.close()
 
+        self.artifacts.append(self.JSON_FILE)
+
     def find_to_json(self):
         """
         Generate the JSON from the search of issues
@@ -538,6 +589,8 @@ class SnapshotExtractorPlugin(BlockingPlugin):
         text_file.write(json.dumps(json_dict))
         text_file.close()
 
+        self.artifacts.append(self.JSON_FILE)
+
     def port_to_json(self):
         """
         Generate the JSON from the search of open port
@@ -587,6 +640,8 @@ class SnapshotExtractorPlugin(BlockingPlugin):
         text_file.write(json.dumps(json_dict))
         text_file.close()
 
+        self.artifacts.append(self.JSON_FILE)
+
     def port_to_csv(self):
         """
         Generate the CSV from the search of issues
@@ -634,6 +689,8 @@ class SnapshotExtractorPlugin(BlockingPlugin):
                 msg = "Could not write line for {target}".format(target=target)
                 self.logger.info(msg)
                 continue
+
+        self.artifacts.append(self.CSV_FILE)
 
     def find_to_csv(self):
         """
@@ -690,6 +747,8 @@ class SnapshotExtractorPlugin(BlockingPlugin):
                 msg = "Could not write line for {target}".format(target=host)
                 self.logger.info(msg)
                 continue
+
+        self.artifacts.append(self.CSV_FILE)
 
     def count_to_csv(self):
         """
@@ -748,6 +807,14 @@ class SnapshotExtractorPlugin(BlockingPlugin):
                 self.logger.info(msg)
                 self.logger.debug(e)
                 continue
+
+        self.artifacts.append(self.CSV_FILE)
+
+    def list_to_csv(self):
+        # Not possible because of no fixed issue schema
+        self.CSV_FILE = None
+
+        self.logger.info("No csv extract possible for List option")
 
     def get_network_info_target(self, host):
         """
@@ -822,7 +889,4 @@ class SnapshotExtractorPlugin(BlockingPlugin):
         Function used to save output of the plugin
         Must be called before shutting down the plugin
         """
-        output_artifacts = [self.logger_path, self.CSV_FILE, self.JSON_FILE]
-
-        if output_artifacts:
-            self.report_artifacts(self.PLUGIN_NAME, output_artifacts)
+        self.report_artifacts(self.PLUGIN_NAME, self.artifacts)

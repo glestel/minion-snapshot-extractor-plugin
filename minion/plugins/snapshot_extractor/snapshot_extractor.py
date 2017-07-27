@@ -505,7 +505,8 @@ class SnapshotExtractorPlugin(BlockingPlugin):
 
             get_ip = self.get_network_info_target(host)
 
-            sum_targets += 1
+            if total > 0:
+                sum_targets += 1
 
             # build a data
             data.__setitem__(target, {
@@ -561,7 +562,7 @@ class SnapshotExtractorPlugin(BlockingPlugin):
             sum_targets += 1
 
             # Build info for target
-            total_issues = len(self.found[target])
+            total_issues = len(self.found[target]["issues"])
             sum_found_issues += total_issues
 
             data.__setitem__(target, {
@@ -824,7 +825,6 @@ class SnapshotExtractorPlugin(BlockingPlugin):
         :return: tuple with ip, hostname
         :rtype: tuple
         """
-
         # Resolve given url
         try:
             physical_name, null, [target_ip] = socket.gethostbyaddr(host)

@@ -344,21 +344,24 @@ class SnapshotExtractorPlugin(BlockingPlugin):
                     self.logger.debug("No scan result for {t} with {p}".format(t=target, p=plan))
                     continue
 
-                last_scan = list_scan[0]
+                # Find the last finished scan
+                for last_scan in list_scan:
+                    if not last_scan["finished"]:
+                        continue
 
-                self.logger.debug("Inspecting {t} with {p}".format(t=target, p=plan))
+                    self.logger.debug("Inspecting {t} with {p}".format(t=target, p=plan))
 
-                # Browse each session in last scan
-                for session in last_scan['sessions']:
-                    # Get each issue in last scan (in each session)
-                    for issue in session['issues']:
-                        # Find info about the issue
-                        full_issue = self.mongodb.issues.find_one({"Id": issue})
+                    # Browse each session in last scan
+                    for session in last_scan['sessions']:
+                        # Get each issue in last scan (in each session)
+                        for issue in session['issues']:
+                            # Find info about the issue
+                            full_issue = self.mongodb.issues.find_one({"Id": issue})
 
-                        # Check that the issue has the needed state
-                        if full_issue["Status"] in self.issue_state:
-                            # Handle according to research mode
-                            self.planned_action(full_issue, target, last_scan)
+                            # Check that the issue has the needed state
+                            if full_issue["Status"] in self.issue_state:
+                                # Handle according to research mode
+                                self.planned_action(full_issue, target, last_scan)
 
     def find_issue(self, issue, target, last_scan):
         """
@@ -400,7 +403,7 @@ class SnapshotExtractorPlugin(BlockingPlugin):
 
                 # Check title of the issue
                 if wanted in issue[row]:
-                    # Clean issue
+                    # Remove ObjectID from mongodb
                     if '_id' in issue:
                         issue.pop('_id')
                     # Add the winner to the found list

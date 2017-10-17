@@ -346,6 +346,9 @@ class SnapshotExtractorPlugin(BlockingPlugin):
 
                 # Find the last finished scan
                 for last_scan in list_scan:
+                    # Don't keep result of failed scan
+                    if last_scan["state"] == "FAILED":
+                        break
                     if not last_scan["finished"]:
                         continue
 
@@ -362,6 +365,9 @@ class SnapshotExtractorPlugin(BlockingPlugin):
                             if full_issue["Status"] in self.issue_state:
                                 # Handle according to research mode
                                 self.planned_action(full_issue, target, last_scan)
+
+                    # End the loop because no results should be found
+                    break
 
     def find_issue(self, issue, target, last_scan):
         """

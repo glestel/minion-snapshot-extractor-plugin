@@ -4,6 +4,7 @@
 # -*- coding: utf-8 -*-
 
 import csv
+import datetime
 import logging
 import requests
 import socket
@@ -65,7 +66,7 @@ class SnapshotExtractorPlugin(BlockingPlugin):
     """:type : list[str]    state of issue wanted, default is current, but can be FalsePositive, Fixed or Ignored"""
     issue_state = ["Current"]
 
-    available_actions = ["count", "find", "port", "list"]
+    available_actions = ["count", "find", "port", "list", "redirect"]
 
     # Function pointers used for processing according to action
     planned_action = None
@@ -104,8 +105,18 @@ class SnapshotExtractorPlugin(BlockingPlugin):
                 ports: [80, 443, 8080]
                 finished: date(1234567890)
         }
+    redirect :
+        {
+            target: {
+                is_redirecting:      True/False
+                location:            https://foo.bar
+                finally_redirected:  https://spam.foo.bar
+                finally_https:       True/False
+                finished: date(1234567890)
+        }
     """
     found = {}
+    scanned_target = []
 
     def initialize_logger(self):
         # create logger
@@ -269,6 +280,11 @@ class SnapshotExtractorPlugin(BlockingPlugin):
             self.csv_creator = self.port_to_csv
             self.json_creator = self.port_to_json
 
+        elif action == "redirect":
+            self.planned_action = self.find_redirect
+            self.csv_creator = self.redirect_to_csv
+            self.json_creator = self.redirect_to_json
+
         # Initialize db connexion
         self.start_mongo_connexion()
 
@@ -333,7 +349,6 @@ class SnapshotExtractorPlugin(BlockingPlugin):
         :type targets: list[str]
         :return: list of result
         """
-
         for target in targets:
             for plan in self.plan_scope:
                 list_scan = list(self.mongodb.scans.find({'configuration.target': target, 'plan.name': plan})
@@ -343,6 +358,8 @@ class SnapshotExtractorPlugin(BlockingPlugin):
                 if len(list_scan) == 0:
                     self.logger.debug("No scan result for {t} with {p}".format(t=target, p=plan))
                     continue
+
+                self.scanned_target.append(target)
 
                 # Find the last finished scan
                 for last_scan in list_scan:
@@ -478,6 +495,36 @@ class SnapshotExtractorPlugin(BlockingPlugin):
 
         self.logger.debug("Found open ports : {iss}".format(iss=issue["Ports"]))
 
+    def find_redirect(self, issue, target, last_scan):
+        """
+        Find target with not http to https redirect
+        :param last_scan: The last scan of the plan
+        :param issue: issue from minion that need to be checked
+        :param target: target having the issue
+        """
+        # Check if there is a result
+        if "No HTTP to HTTPS redirection" in issue.get('Summary'):
+            # Get the extra info
+            extra = issue["URLs"][0]["Extra"]
+
+            self.logger.debug(extra)
+
+            # Check if it was redirected at the first requests
+            finally_redirected = False
+            if "but the final destination was in HTTPS".lower() in extra.lower():
+                # Get the first redirect
+                locs = extra.lower().split(" but the final destination was in https : ")
+                first_redirect = locs[0]
+                final_redirect = locs[1]
+                finally_redirected = True
+            else:
+                first_redirect = extra
+                final_redirect = None
+
+            self.found[target] = {"is_redirecting": False, "location": first_redirect,
+                                  "finally_redirected": finally_redirected, "finally_location": final_redirect,
+                                  "finished": last_scan['finished']}
+
     def count_to_json(self):
         """
         Generate the JSON from the count of issues
@@ -525,6 +572,68 @@ class SnapshotExtractorPlugin(BlockingPlugin):
                 "reverse_dns": get_ip[1],
                 "issues": summary,
                 "sum_issues": total,
+                "tags": self.fetch_tags(target),
+                "finished": self.found[target]["finished"].strftime(self.DATETIME_OUTPUT_FORMAT)
+            })
+
+        # Create a dictionary of metadata
+        meta = {}
+        meta.__setitem__("sum_targets", sum_targets)
+        meta.__setitem__("sum_tested_targets", sum_tested_targets)
+        meta.__setitem__("sum_found_issues", sum_found)
+
+        # Build final json structure
+        json_dict = {
+            "meta": meta,
+            "data": data
+        }
+
+        # Write result
+        text_file.write(json.dumps(json_dict))
+        text_file.close()
+
+        self.artifacts.append(self.JSON_FILE)
+
+    def redirect_to_json(self):
+        """
+        Generate the JSON from the count of issues
+        """
+        # dictionary of data for building json dump
+        data = {}
+        sum_found = len(self.scanned_target)
+        sum_targets = len(self.found)
+        sum_tested_targets = 0
+        text_file = open(self.JSON_FILE, "w")
+
+        # Build info for each found target
+        for target in self.scanned_target:
+            # Create result if there is no issue (case HTTPS redirection succesfull)
+            if target not in self.found:
+                # Case no result : redirect successful or no input
+                self.logger.debug("{targ} is redirectig to HTTPS".format(targ=target))
+                self.found[target] = {"is_redirecting": True, "location": None,
+                                      "finally_redirected": None, "finally_location": None,
+                                      "finished": datetime.datetime.now()}
+
+            host = urlparse.urlparse(target).hostname
+
+            # Check if target has not been parsed
+            if not host:
+                host = target
+
+            get_ip = self.get_network_info_target(host)
+
+            # Remove date
+            results = self.found.get(target).copy()
+            results.pop('finished')
+
+            # build a data
+            data.__setitem__(target, {
+                "host": host,
+                "target_ip": get_ip[0],
+                "url": target,
+                "reverse_dns": get_ip[1],
+                "results": results,
                 "tags": self.fetch_tags(target),
                 "finished": self.found[target]["finished"].strftime(self.DATETIME_OUTPUT_FORMAT)
             })
@@ -693,6 +802,60 @@ class SnapshotExtractorPlugin(BlockingPlugin):
                     to_write["port"] = issue
 
                     writer.writerow(to_write)
+
+            except Exception as e:
+                self.logger.debug(e)
+                msg = "Could not write line for {target}".format(target=target)
+                self.logger.info(msg)
+                continue
+
+        self.artifacts.append(self.CSV_FILE)
+
+    def redirect_to_csv(self):
+        """
+        Generate the CSV from the search of issues
+        """
+        # Build header
+        fields = ["ip", "fqdn", "HTTPS redirecting", "location", "Finally HTTPS", "Final location", "seen"]
+
+        # Add tags
+        fields.extend(self.target_tags)
+
+        # Open csv
+        writer = self.open_csv(fields)
+
+        for target in self.scanned_target:
+            # Get tags for target
+            tags = self.fetch_tags(target)
+
+            # Clean the target for resolution
+            host = urlparse.urlparse(target).hostname
+
+            get_ip = self.get_network_info_target(host)
+            physical_name = get_ip[1]
+
+            # Add entry for no issue
+            if target not in self.found:
+                self.found[target] = {"is_redirecting": True, "location": None,
+                                      "finally_redirected": None, "finally_location": None,
+                                      "finished": datetime.datetime.now()}
+
+            # Build csv
+            line = {"ip": target, "fqdn": physical_name, "HTTPS redirecting": self.found[target]["is_redirecting"],
+                    "location": self.found[target]["location"], "Finally HTTPS": self.found[target]["finally_redirected"],
+                    "Final location": self.found[target]["finally_location"],
+                    "seen": self.found[target]["finished"].strftime(self.DATETIME_OUTPUT_FORMAT)}
+
+            # add tags
+            line.update(tags)
+
+            try:
+                # Normalize string for encoding
+                for key in line.keys():
+                    if line[key] and type(line[key]) is unicode:
+                        line[key] = line[key].encode("utf8")
+
+                writer.writerow(line)
 
             except Exception as e:
                 self.logger.debug(e)

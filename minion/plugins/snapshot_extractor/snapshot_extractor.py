@@ -588,7 +588,7 @@ class SnapshotExtractorPlugin(BlockingPlugin):
                 "issues": summary,
                 "sum_issues": total,
                 "tags": self.fetch_tags(target),
-                "finished": self.found[target]["finished"].strftime(self.DATETIME_OUTPUT_FORMAT)
+                "finished": self.found[target]["finished"]
             })
 
         # Create a dictionary of metadata

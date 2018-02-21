@@ -12,13 +12,15 @@ import urlparse
 import uuid
 import json
 
+from target_manager import TargetManager
+
 from minion.plugins.base import BlockingPlugin
-from pymongo import MongoClient
+from minion.backend.models import Scan, Session
 
 
 class SnapshotExtractorPlugin(BlockingPlugin):
     PLUGIN_NAME = "Snapshot extractor plugin"
-    PLUGIN_VERSION = "0.1"
+    PLUGIN_VERSION = "0.2"
 
     API_PATH = "http://127.0.0.1:8383"
 
@@ -32,6 +34,10 @@ class SnapshotExtractorPlugin(BlockingPlugin):
     # targets for an everywhere use
     # FIXME clean this global attribute elsewhere
     targets = []
+
+    # Target index to get id for url
+    target_manager = TargetManager()
+
     CSV_FILE = "extract.csv"
     JSON_FILE = "extract.json"
 
@@ -39,10 +45,6 @@ class SnapshotExtractorPlugin(BlockingPlugin):
     artifacts = []
 
     DATETIME_OUTPUT_FORMAT = "%Y-%m-%d %H:%M:%S.%f"
-
-    MONGO_HOST = '127.0.0.1'
-    MONGO_PORT = 27017
-    mongodb = None
 
     """:type : list[str]    Array of groups where the search will be done"""
     group_scope = []
@@ -118,6 +120,27 @@ class SnapshotExtractorPlugin(BlockingPlugin):
     found = {}
     scanned_target = []
 
+    def request_api(self, uri):
+        """
+        Run request at Minion Backend API, handle errors and return JSON result
+        :param uri: action of the URI like "sites?url=evil.corp"
+        :type uri:  str
+        :return: json of the result
+        :rtype: dict
+        """
+        r = requests.get("{api}/{req}".format(api=self.API_PATH, req=uri))
+
+        # Check request worked
+        try:
+            r.raise_for_status()
+            return r.json()
+
+        except Exception as e:
+            msg = "Error occurred while requesting {api}/{req}".format(api=self.API_PATH, req=uri)
+            self.logger.error(msg)
+            self.logger.error(e.message)
+            self.report_error(msg, e.message)
+
     def initialize_logger(self):
         # create logger
         self.logger = logging.getLogger()
@@ -141,9 +164,6 @@ class SnapshotExtractorPlugin(BlockingPlugin):
         # self.logger.warn('warn message')
         # self.logger.error('error message')
         # self.logger.critical('critical message')
-
-    def start_mongo_connexion(self):
-        self.mongodb = MongoClient(host=self.MONGO_HOST, port=self.MONGO_PORT).minion
 
     def open_csv(self, fields):
         """
@@ -197,6 +217,8 @@ class SnapshotExtractorPlugin(BlockingPlugin):
         # Get the plan scope (mandatory option)
         if "plan_scope" in self.configuration:
             self.plan_scope = self.configuration.get('plan_scope')
+            # Update plan index
+            self.target_manager.add_plans(self.plan_scope)
             self.logger.debug("Plan scope set to {scope}".format(scope=self.plan_scope))
 
         # Check mandatory options have been defined
@@ -285,16 +307,13 @@ class SnapshotExtractorPlugin(BlockingPlugin):
             self.csv_creator = self.redirect_to_csv
             self.json_creator = self.redirect_to_json
 
-        # Initialize db connexion
-        self.start_mongo_connexion()
+        # Populate list of concerned targets
+        self.find_targets()
 
-        # Get list of concerned targets
-        targets = self.find_targets()
-
-        self.logger.debug("Found {nb} targets for checking".format(nb=len(targets)))
+        self.logger.debug("Found {nb} targets for checking".format(nb=len(self.target_manager.target_index)))
 
         # Lookup in last scan for wanted issue
-        self.search_targets(targets)
+        self.search_targets()
 
         self.logger.debug("Found {nb} results after checking".format(nb=len(self.found)))
 
@@ -312,10 +331,7 @@ class SnapshotExtractorPlugin(BlockingPlugin):
     def find_targets(self):
         """
         Fetch target needed for the search defined in group_scope
-        :return: list of targets
-        :rtype: list[str]
         """
-        targets = set()
 
         # Look up target for each group if defined
         if self.group_scope:
@@ -326,7 +342,9 @@ class SnapshotExtractorPlugin(BlockingPlugin):
                 try:
                     r.raise_for_status()
                     res = r.json()["group"]['sites']
-                    targets.update(res)
+
+                    # Add sites to scan list
+                    self.target_manager.add_targets(res)
 
                 except Exception as e:
                     msg = "Error occurred while retrieving targets for group {group}".format(group=group)
@@ -336,55 +354,49 @@ class SnapshotExtractorPlugin(BlockingPlugin):
 
         else:
             # Get all targets from database
-            for target in self.mongodb.sites.find():
-                url = target.get('url')
-                targets.add(url)
-        self.targets = targets
-        return list(targets)
+            res = self.request_api("/sites")
 
-    def search_targets(self, targets):
+            # Add target to manager
+            self.target_manager.add_targets(res.get('sites'))
+
+    def search_targets(self):
         """
         Search wanted issues in targets scan
-        :param targets: list of target in scope for the search
-        :type targets: list[str]
-        :return: list of result
         """
-        for target in targets:
-            for plan in self.plan_scope:
-                list_scan = list(self.mongodb.scans.find({'configuration.target': target, 'plan.name': plan})
-                                 .sort("created", -1))
+        for target, target_id in self.target_manager.target_index.items():
+            for plan, plan_id in self.target_manager.plan_index.items():
+                # Get list of last run scan
+                last_scan = Scan.get_last_scan(target_id, plan_id)
 
                 # Check at least one scan has been run
-                if len(list_scan) == 0:
+                if not last_scan:
                     self.logger.debug("No scan result for {t} with {p}".format(t=target, p=plan))
                     continue
 
+                # FIXME Still needed ?
                 self.scanned_target.append(target)
 
-                # Find the last finished scan
-                for last_scan in list_scan:
-                    # Don't keep result of failed scan
-                    if last_scan["state"] == "FAILED":
-                        break
-                    if not last_scan["finished"]:
+                # Check if scan is finished
+                if last_scan.state != "FINISHED":
+                    # Get previous scan
+                    last_scan = Scan.get_second_to_last_scan(target_id, plan_id)
+
+                    # Check if two scans have been run
+                    if not last_scan or last_scan.state != "FINISHED":
+                        self.logger.debug("No FINISHED scan result for {t} with {p}".format(t=target, p=plan))
                         continue
 
-                    self.logger.debug("Inspecting {t} with {p}".format(t=target, p=plan))
+                self.logger.debug("Inspecting {t} with {p}".format(t=target, p=plan))
 
-                    # Browse each session in last scan
-                    for session in last_scan['sessions']:
-                        # Get each issue in last scan (in each session)
-                        for issue in session['issues']:
-                            # Find info about the issue
-                            full_issue = self.mongodb.issues.find_one({"Id": issue})
-
-                            # Check that the issue has the needed state
-                            if full_issue["Status"] in self.issue_state:
-                                # Handle according to research mode
-                                self.planned_action(full_issue, target, last_scan)
-
-                    # End the loop because no results should be found
-                    break
+                result = last_scan.dict()
+                # Browse each session in last scan
+                for session in result.get('sessions'):
+                    # Get each issue in last scan (in each session)
+                    for issue in session.get('issues'):
+                        # Check that the issue has the needed state
+                        if issue.get("Status") in self.issue_state:
+                            # Handle according to research mode
+                            self.planned_action(issue, target, result)
 
     def find_issue(self, issue, target, last_scan):
         """
@@ -476,7 +488,8 @@ class SnapshotExtractorPlugin(BlockingPlugin):
         """
 
         # Check the issue concerns open port
-        if "Ports" not in issue:
+        port = issue.get('Ports')
+        if not port:
             self.logger.debug("Issue had not defined port : {iss}".format(iss=issue["Summary"]))
             return
 
@@ -1043,9 +1056,16 @@ class SnapshotExtractorPlugin(BlockingPlugin):
         if "tags" in res:
             existing_tags = res["tags"]
 
-            # Build result
-            for tag in self.target_tags:
-                filtered_tags[tag] = existing_tags.get(tag)
+            # Retrieve tags
+            # Format of result :
+            # [{u'name': u'pfs', u'value': u'[PFS] EnGen.prod'}, {u'name': u'service', u'value': u'[S] Actu'}]
+            for item in existing_tags:
+                tag_name = item.get("name")
+                tag_value = item.get("value")
+
+                # Add tag if needed
+                if tag_name in self.target_tags:
+                    filtered_tags[tag_name] = tag_value
 
         return filtered_tags
 

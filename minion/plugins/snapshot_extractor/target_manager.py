@@ -40,20 +40,28 @@ class TargetManager:
         Add the given list of plan to the manager
         :param plan_list: list of plans ["Network Scan", "TLS Audit", ...]
         :type plan_list: list[str]
+        :return status of operation
+        :rtype bool
         """
         for plan in plan_list:
             # Check if plan_id is already known
             if plan not in self.plan_index:
                 # Get plan id from Minion
-                res = self.request_api("/plans/{name}".format(name=plan))
+                res = self.request_api("plans/{name}".format(name=plan))
 
                 # Check plan exist
+                if not res:
+                    logging.error("No plan found")
+                    return False
+
                 if res.get('success'):
                     plan_id = res["plan"]["id"]
                     self.plan_index[plan] = plan_id
+                    return True
                 else:
                     # Raise error
                     logging.error(res.get('reason'))
+                    return False
 
     def request_api(self, uri):
         """
@@ -77,3 +85,4 @@ class TargetManager:
 
             # FIXME raise exception ?
             # self.report_error(msg, e.message)
+            return None

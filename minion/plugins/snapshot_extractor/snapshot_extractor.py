@@ -218,8 +218,10 @@ class SnapshotExtractorPlugin(BlockingPlugin):
         if "plan_scope" in self.configuration:
             self.plan_scope = self.configuration.get('plan_scope')
             # Update plan index
-            self.target_manager.add_plans(self.plan_scope)
-            self.logger.debug("Plan scope set to {scope}".format(scope=self.plan_scope))
+            if self.target_manager.add_plans(self.plan_scope):
+                self.logger.debug("Plan scope set to {scope}".format(scope=self.plan_scope))
+            else:
+                self.report_error("Plan error", "could not get plan")
 
         # Check mandatory options have been defined
         if not self.plan_scope:

@@ -12,6 +12,8 @@ import urlparse
 import uuid
 import json
 
+from datetime import date
+
 from target_manager import TargetManager
 
 from minion.plugins.base import BlockingPlugin
@@ -444,12 +446,13 @@ class SnapshotExtractorPlugin(BlockingPlugin):
                     if '_id' in issue:
                         issue.pop('_id')
                     # Add the winner to the found list
+                    finished = date.fromtimestamp(last_scan['finished'])
                     if target not in self.found:
-                        self.found[target] = dict(issues=[issue], finished=last_scan['finished'])
+                        self.found[target] = dict(issues=[issue], finished=finished)
                     else:
                         self.found[target]["issues"].append(issue)
-                        if last_scan["finished"] > self.found[target]["finished"]:
-                            self.found[target]["finished"] = last_scan["finished"]
+                        if finished > self.found[target]["finished"]:
+                            self.found[target]["finished"] = finished
 
                     self.logger.debug("Found one issue : {iss}".format(iss=issue[row]))
 
@@ -588,7 +591,7 @@ class SnapshotExtractorPlugin(BlockingPlugin):
                 "issues": summary,
                 "sum_issues": total,
                 "tags": self.fetch_tags(target),
-                "finished": self.found[target]["finished"]
+                "finished": self.found[target]["finished"].strftime(self.DATETIME_OUTPUT_FORMAT)
             })
 
         # Create a dictionary of metadata

@@ -4,13 +4,13 @@
 # -*- coding: utf-8 -*-
 
 import csv
-from datetime import datetime as dt
 import logging
 import requests
 import socket
 import urlparse
 import uuid
 import json
+from datetime import datetime as dt
 
 from target_manager import TargetManager
 
@@ -788,16 +788,10 @@ class SnapshotExtractorPlugin(BlockingPlugin):
         # Build header
         fields = ["ip", "fqdn", "port", "seen"]
 
-        # Add tags
-        #fields.extend(self.target_tags)
-
         # Open csv
         writer = self.open_csv(fields)
 
         for target in self.found:
-            # Get tags for target
-            #tags = self.fetch_tags(target)
-
             # Clean the target for resolution
 
             get_ip = self.get_network_info_target(target)
@@ -806,9 +800,6 @@ class SnapshotExtractorPlugin(BlockingPlugin):
             # Build csv
             line = {"ip": target, "fqdn": physical_name, "seen":
                     self.found[target]["finished"].strftime(self.DATETIME_OUTPUT_FORMAT)}
-
-            # add tags
-            #line.update(tags)
 
             try:
                 # Normalize string for encoding

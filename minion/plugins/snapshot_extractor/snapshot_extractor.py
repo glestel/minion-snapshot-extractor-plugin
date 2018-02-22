@@ -4,7 +4,7 @@
 # -*- coding: utf-8 -*-
 
 import csv
-import datetime as dt
+from datetime import datetime as dt
 import logging
 import requests
 import socket
@@ -416,7 +416,7 @@ class SnapshotExtractorPlugin(BlockingPlugin):
                 # Check title of the issue
                 if wanted in issue[row]:
                     # Add the winner to the found list
-                    finished = dt.datetime.fromtimestamp(last_scan['finished'])
+                    finished = dt.fromtimestamp(last_scan['finished'])
                     if target not in self.found:
                         self.found[target] = dict(issues=[issue[row]], finished=finished)
                     else:
@@ -445,7 +445,7 @@ class SnapshotExtractorPlugin(BlockingPlugin):
                     if '_id' in issue:
                         issue.pop('_id')
                     # Add the winner to the found list
-                    finished = dt.datetime.fromtimestamp(last_scan['finished'])
+                    finished = dt.fromtimestamp(last_scan['finished'])
                     if target not in self.found:
                         self.found[target] = dict(issues=[issue], finished=finished)
                     else:
@@ -463,7 +463,7 @@ class SnapshotExtractorPlugin(BlockingPlugin):
         :param target: target having the issue
         """
         # Check if target has record initialized
-        finished = dt.datetime.fromtimestamp(last_scan['finished'])
+        finished = dt.fromtimestamp(last_scan['finished'])
         if target not in self.found:
             # Create counters
             counts = {}
@@ -502,7 +502,7 @@ class SnapshotExtractorPlugin(BlockingPlugin):
         ip = issue["URLs"][0]["URL"]
 
         # Add ports found with initialization if needed
-        finished = dt.datetime.fromtimestamp(last_scan['finished'])
+        finished = dt.fromtimestamp(last_scan['finished'])
         if ip not in self.found:
             self.found[ip] = dict(ports=issue["Ports"], finished=finished)
         else:
@@ -540,7 +540,7 @@ class SnapshotExtractorPlugin(BlockingPlugin):
                 first_redirect = extra
                 final_redirect = None
 
-            finished = dt.datetime.fromtimestamp(last_scan['finished'])
+            finished = dt.fromtimestamp(last_scan['finished'])
             self.found[target] = {"is_redirecting": False, "location": first_redirect,
                                   "finally_redirected": finally_redirected, "finally_location": final_redirect,
                                   "finished": finished}
@@ -633,7 +633,7 @@ class SnapshotExtractorPlugin(BlockingPlugin):
                 self.logger.debug("{targ} is redirectig to HTTPS".format(targ=target))
                 self.found[target] = {"is_redirecting": True, "location": None,
                                       "finally_redirected": None, "finally_location": None,
-                                      "finished": dt.datetime.datetime.now()}
+                                      "finished": dt.now()}
 
             host = urlparse.urlparse(target).hostname
 
@@ -858,7 +858,7 @@ class SnapshotExtractorPlugin(BlockingPlugin):
             if target not in self.found:
                 self.found[target] = {"is_redirecting": True, "location": None,
                                       "finally_redirected": None, "finally_location": None,
-                                      "finished": dt.datetime.datetime.now()}
+                                      "finished": dt.now()}
 
             # Build csv
             line = {"ip": target, "fqdn": physical_name, "HTTPS redirecting": self.found[target]["is_redirecting"],

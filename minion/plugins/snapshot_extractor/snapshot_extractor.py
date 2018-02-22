@@ -4,7 +4,6 @@
 # -*- coding: utf-8 -*-
 
 import csv
-import datetime
 import logging
 import requests
 import socket

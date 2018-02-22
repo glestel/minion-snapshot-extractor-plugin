@@ -418,12 +418,13 @@ class SnapshotExtractorPlugin(BlockingPlugin):
                 # Check title of the issue
                 if wanted in issue[row]:
                     # Add the winner to the found list
+                    finished = date.fromtimestamp(last_scan['finished'])
                     if target not in self.found:
-                        self.found[target] = dict(issues=[issue[row]], finished=last_scan['finished'])
+                        self.found[target] = dict(issues=[issue[row]], finished=finished)
                     else:
                         self.found[target]["issues"].append(issue[row])
-                        if last_scan["finished"] > self.found[target]["finished"]:
-                            self.found[target]["finished"] = last_scan["finished"]
+                        if finished > self.found[target]["finished"]:
+                            self.found[target]["finished"] = finished
 
                     self.logger.debug("Found one issue : {iss}".format(iss=issue[row]))
 
@@ -464,16 +465,17 @@ class SnapshotExtractorPlugin(BlockingPlugin):
         :param target: target having the issue
         """
         # Check if target has record initialized
+        finished = date.fromtimestamp(last_scan['finished'])
         if target not in self.found:
             # Create counters
             counts = {}
             for sev in self.texts_issues:
                 counts[sev] = 0
 
-            self.found[target] = dict(counts=counts, finished=last_scan["finished"])
+            self.found[target] = dict(counts=counts, finished=finished)
 
-        if last_scan["finished"] > self.found[target]["finished"]:
-            self.found[target]["finished"] = last_scan["finished"]
+        if finished > self.found[target]["finished"]:
+            self.found[target]["finished"] = finished
         # Look up in every specified row
         for row in self.row_labels:
             # Get text of the issue
@@ -502,14 +504,15 @@ class SnapshotExtractorPlugin(BlockingPlugin):
         ip = issue["URLs"][0]["URL"]
 
         # Add ports found with initialization if needed
+        finished = date.fromtimestamp(last_scan['finished'])
         if ip not in self.found:
-            self.found[ip] = dict(ports=issue["Ports"], finished=last_scan['finished'])
+            self.found[ip] = dict(ports=issue["Ports"], finished=finished)
         else:
             self.found[ip]["ports"].extend(issue["Ports"])
 
             # Update timestamp
-            if last_scan["finished"] > self.found[ip]["finished"]:
-                self.found[ip]["finished"] = last_scan["finished"]
+            if finished > self.found[ip]["finished"]:
+                self.found[ip]["finished"] = finished
 
         self.logger.debug("Found open ports : {iss}".format(iss=issue["Ports"]))
 

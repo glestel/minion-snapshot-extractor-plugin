@@ -12,7 +12,7 @@ import urlparse
 import uuid
 import json
 
-from datetime import date
+from datetime import datetime
 
 from target_manager import TargetManager
 
@@ -418,7 +418,7 @@ class SnapshotExtractorPlugin(BlockingPlugin):
                 # Check title of the issue
                 if wanted in issue[row]:
                     # Add the winner to the found list
-                    finished = date.fromtimestamp(last_scan['finished'])
+                    finished = datetime.fromtimestamp(last_scan['finished'])
                     if target not in self.found:
                         self.found[target] = dict(issues=[issue[row]], finished=finished)
                     else:
@@ -447,7 +447,7 @@ class SnapshotExtractorPlugin(BlockingPlugin):
                     if '_id' in issue:
                         issue.pop('_id')
                     # Add the winner to the found list
-                    finished = date.fromtimestamp(last_scan['finished'])
+                    finished = datetime.fromtimestamp(last_scan['finished'])
                     if target not in self.found:
                         self.found[target] = dict(issues=[issue], finished=finished)
                     else:
@@ -465,7 +465,7 @@ class SnapshotExtractorPlugin(BlockingPlugin):
         :param target: target having the issue
         """
         # Check if target has record initialized
-        finished = date.fromtimestamp(last_scan['finished'])
+        finished = datetime.fromtimestamp(last_scan['finished'])
         if target not in self.found:
             # Create counters
             counts = {}
@@ -504,7 +504,7 @@ class SnapshotExtractorPlugin(BlockingPlugin):
         ip = issue["URLs"][0]["URL"]
 
         # Add ports found with initialization if needed
-        finished = date.fromtimestamp(last_scan['finished'])
+        finished = datetime.fromtimestamp(last_scan['finished'])
         if ip not in self.found:
             self.found[ip] = dict(ports=issue["Ports"], finished=finished)
         else:
@@ -542,9 +542,10 @@ class SnapshotExtractorPlugin(BlockingPlugin):
                 first_redirect = extra
                 final_redirect = None
 
+            finished = datetime.fromtimestamp(last_scan['finished'])
             self.found[target] = {"is_redirecting": False, "location": first_redirect,
                                   "finally_redirected": finally_redirected, "finally_location": final_redirect,
-                                  "finished": last_scan['finished']}
+                                  "finished": finished}
 
     def count_to_json(self):
         """
